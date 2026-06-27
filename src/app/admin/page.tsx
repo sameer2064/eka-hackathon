@@ -3,565 +3,504 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
+type Provider = {
+  id: string;
+  full_name?: string;
+  phone?: string;
+  city?: string;
+  service_category?: string;
+  description?: string;
+  image?: string;
+  approved?: boolean;
+  premium?: boolean;
+  featured?: boolean;
+  verified?: boolean;
+  ai_score?: number;
+  trust_score?: number;
+  total_bookings?: number;
+  created_at?: string;
+};
+
+type Booking = {
+  id: string;
+  customer_name?: string;
+  phone?: string;
+  city?: string;
+  address?: string;
+  notes?: string;
+  message?: string;
+  status?: string;
+  created_at?: string;
+};
+
 export default function AdminPage() {
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
-  const [providers, setProviders] =
-    useState<any[]>([]);
-
-  const [bookings, setBookings] =
-    useState<any[]>([]);
-
-  const [stats, setStats] =
-    useState({
-      totalProviders: 0,
-      totalBookings: 0,
-      revenue: 0,
-      pendingProviders: 0,
-    });
+  const stats = {
+    totalProviders: providers.length,
+    totalBookings: bookings.length,
+    revenue: bookings.length * 2500,
+    pendingProviders: providers.filter((p) => !p.approved).length,
+  };
 
   useEffect(() => {
-
     loadData();
-
   }, []);
 
   async function loadData() {
+    setLoading(true);
+    setError("");
 
-    const { data: providersData } =
-      await supabase
-        .from("providers")
-        .select("*")
-        .order("created_at", {
-          ascending: false,
-        });
+    const { data: providersData, error: providersError } = await supabase
+      .from("providers")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-    const { data: bookingsData } =
-      await supabase
-        .from("bookings")
-        .select("*")
-        .order("created_at", {
-          ascending: false,
-        });
+    const { data: bookingsData, error: bookingsError } = await supabase
+      .from("bookings")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (providersError) {
+      setError(providersError.message);
+    }
+
+    if (bookingsError) {
+      setError(bookingsError.message);
+    }
 
     setProviders(providersData || []);
     setBookings(bookingsData || []);
-
-    setStats({
-      totalProviders:
-        providersData?.length || 0,
-
-      totalBookings:
-        bookingsData?.length || 0,
-
-      revenue:
-        (bookingsData?.length || 0) * 2500,
-
-      pendingProviders:
-        providersData?.filter(
-          (p) => !p.approved
-        ).length || 0,
-    });
+    setLoading(false);
   }
 
-  async function approveProvider(
-    id: string
-  ) {
-
-    await supabase
-      .from("providers")
-      .update({
-        approved: true,
-      })
-      .eq("id", id);
-
-    loadData();
-  }
-
-  async function removeProvider(
-    id: string
-  ) {
-
-    await supabase
-      .from("providers")
-      .delete()
-      .eq("id", id);
-
-    loadData();
-  }
-
-  async function togglePremium(
+  async function updateProvider(
     id: string,
-    current: boolean
+    payload: Partial<Provider>,
+    actionName: string
   ) {
+    setActionLoading(`${id}-${actionName}`);
+    setError("");
 
-    await supabase
+    const { error } = await supabase
       .from("providers")
-      .update({
-        premium: !current,
-      })
+      .update(payload)
       .eq("id", id);
 
+    if (error) {
+      setError(error.message);
+      console.error(error);
+    }
+
+    setActionLoading(null);
     loadData();
   }
 
-  async function toggleFeatured(
-    id: string,
-    current: boolean
-  ) {
+  async function removeProvider(id: string) {
+    const ok = confirm("Are you sure you want to remove this provider?");
+    if (!ok) return;
 
-    await supabase
-      .from("providers")
-      .update({
-        featured: !current,
-      })
-      .eq("id", id);
+    setActionLoading(`${id}-remove`);
+    setError("");
 
-    loadData();
-  }
+    const { error } = await supabase.from("providers").delete().eq("id", id);
 
-  async function toggleVerified(
-    id: string,
-    current: boolean
-  ) {
+    if (error) {
+      setError(error.message);
+      console.error(error);
+    }
 
-    await supabase
-      .from("providers")
-      .update({
-        verified: !current,
-      })
-      .eq("id", id);
-
-    loadData();
-  }
-
-  async function boostAI(
-    id: string,
-    current: number
-  ) {
-
-    await supabase
-      .from("providers")
-      .update({
-        ai_score:
-          (current || 0) + 10,
-      })
-      .eq("id", id);
-
-    loadData();
-  }
-
-  async function boostTrust(
-    id: string,
-    current: number
-  ) {
-
-    await supabase
-      .from("providers")
-      .update({
-        trust_score:
-          (current || 0) + 10,
-      })
-      .eq("id", id);
-
+    setActionLoading(null);
     loadData();
   }
 
   return (
+    <main className="min-h-screen overflow-hidden bg-[#050505] text-white">
+      <div className="fixed inset-0 -z-10">
+        <div className="absolute left-0 top-0 h-[500px] w-[500px] rounded-full bg-red-500/20 blur-[130px]" />
+        <div className="absolute right-0 top-32 h-[450px] w-[450px] rounded-full bg-orange-500/10 blur-[120px]" />
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.045)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.045)_1px,transparent_1px)] bg-[size:64px_64px]" />
+      </div>
 
-    <main className="min-h-screen bg-black text-white">
+      <section className="mx-auto max-w-7xl px-5 py-12 md:py-20">
+        <div className="mb-10 flex flex-col justify-between gap-6 md:flex-row md:items-end">
+          <div>
+            <p className="mb-4 text-sm font-black uppercase tracking-[0.35em] text-red-400">
+              EKA Control Center
+            </p>
 
-      <section className="max-w-[1600px] mx-auto px-6 py-32">
+            <h1 className="text-5xl font-black tracking-tight md:text-7xl">
+              Admin Panel
+            </h1>
 
-        <div className="mb-20">
+            <p className="mt-5 max-w-3xl text-lg leading-8 text-zinc-400">
+              Manage providers, bookings, verification, premium visibility,
+              featured providers, AI score and trust score.
+            </p>
+          </div>
 
-          <p className="uppercase tracking-[0.4em] text-red-500 font-black mb-6">
-            EKA CONTROL CENTER
-          </p>
-
-          <h1 className="text-8xl font-black leading-none mb-8">
-            Super Admin Panel
-          </h1>
-
-          <p className="text-zinc-500 text-2xl max-w-3xl">
-            Complete control over providers,
-            AI ranking systems, bookings,
-            premium systems and marketplace growth.
-          </p>
-
+          <button
+            onClick={loadData}
+            className="w-fit rounded-full bg-white px-6 py-3 text-sm font-black text-black transition hover:scale-105"
+          >
+            Refresh Data
+          </button>
         </div>
 
-        <div className="grid lg:grid-cols-4 gap-8 mb-20">
-
-          <div className="glass-heavy rounded-[40px] p-8">
-
-            <p className="text-zinc-500 mb-5 text-lg">
-              Providers
-            </p>
-
-            <h2 className="text-7xl font-black">
-              {stats.totalProviders}
-            </h2>
-
+        {error && (
+          <div className="mb-8 rounded-3xl border border-red-500/30 bg-red-500/10 p-5 text-red-200">
+            <p className="font-black">Supabase Error</p>
+            <p className="mt-2 text-sm">{error}</p>
           </div>
+        )}
 
-          <div className="glass-heavy rounded-[40px] p-8">
-
-            <p className="text-zinc-500 mb-5 text-lg">
-              Bookings
-            </p>
-
-            <h2 className="text-7xl font-black">
-              {stats.totalBookings}
-            </h2>
-
-          </div>
-
-          <div className="glass-heavy rounded-[40px] p-8 border border-green-500/20">
-
-            <p className="text-zinc-500 mb-5 text-lg">
-              Revenue
-            </p>
-
-            <h2 className="text-7xl font-black text-green-400">
-              Rs {stats.revenue}
-            </h2>
-
-          </div>
-
-          <div className="glass-heavy rounded-[40px] p-8 border border-red-500/20">
-
-            <p className="text-zinc-500 mb-5 text-lg">
-              Pending
-            </p>
-
-            <h2 className="text-7xl font-black text-red-400">
-              {stats.pendingProviders}
-            </h2>
-
-          </div>
-
+        <div className="mb-10 grid gap-4 md:grid-cols-4">
+          <StatCard title="Providers" value={stats.totalProviders} />
+          <StatCard title="Bookings" value={stats.totalBookings} />
+          <StatCard title="Revenue" value={`Rs ${stats.revenue}`} green />
+          <StatCard title="Pending" value={stats.pendingProviders} red />
         </div>
 
-        <div className="glass-heavy rounded-[40px] p-10 mb-16">
-
-          <div className="flex items-center justify-between mb-10">
-
+        <div className="rounded-[36px] border border-white/10 bg-white/[0.055] p-5 shadow-2xl backdrop-blur-xl md:p-8">
+          <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-center">
             <div>
-
-              <h2 className="text-5xl font-black mb-3">
-                Provider Control Center
+              <h2 className="text-3xl font-black md:text-5xl">
+                Provider Control
               </h2>
-
-              <p className="text-zinc-500 text-xl">
-                Manage marketplace intelligence
+              <p className="mt-2 text-zinc-500">
+                Approve, verify, feature, boost and manage providers.
               </p>
-
             </div>
 
+            <span className="w-fit rounded-full bg-green-400/10 px-4 py-2 text-sm font-black text-green-300">
+              {providers.length} providers loaded
+            </span>
           </div>
 
-          <div className="space-y-8">
-
-            {providers.map((provider) => (
-
-              <div
-                key={provider.id}
-                className="bg-black rounded-[36px] p-8 border border-white/5"
-              >
-
-                <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-10">
-
-                  <div className="flex items-center gap-6">
-
-                    <img
-                      src={
-                        provider.image ||
-                        "https://placehold.co/200x200"
-                      }
-                      className="w-28 h-28 rounded-[32px] object-cover border border-white/10"
-                    />
-
-                    <div>
-
-                      <div className="flex flex-wrap items-center gap-3 mb-3">
-
-                        <h3 className="text-4xl font-black">
-                          {provider.full_name}
-                        </h3>
-
-                        {provider.verified && (
-
-                          <div className="bg-blue-500 px-4 py-2 rounded-full text-sm font-black">
-                            VERIFIED
-                          </div>
-
+          {loading ? (
+            <div className="rounded-3xl bg-black/50 p-8 text-zinc-400">
+              Loading admin data...
+            </div>
+          ) : providers.length === 0 ? (
+            <div className="rounded-3xl bg-black/50 p-8 text-zinc-400">
+              No providers found.
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {providers.map((provider) => (
+                <div
+                  key={provider.id}
+                  className="rounded-[30px] border border-white/10 bg-black/55 p-5 transition hover:border-red-500/40"
+                >
+                  <div className="flex flex-col justify-between gap-6 lg:flex-row">
+                    <div className="flex gap-5">
+                      <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-3xl border border-white/10 bg-zinc-900 text-4xl">
+                        {provider.image ? (
+                          <img
+                            src={provider.image}
+                            alt={provider.full_name || "Provider"}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          "🛠️"
                         )}
-
-                        {provider.premium && (
-
-                          <div className="bg-yellow-500 text-black px-4 py-2 rounded-full text-sm font-black">
-                            PREMIUM
-                          </div>
-
-                        )}
-
-                        {provider.featured && (
-
-                          <div className="bg-red-500 px-4 py-2 rounded-full text-sm font-black">
-                            FEATURED
-                          </div>
-
-                        )}
-
                       </div>
 
-                      <p className="text-zinc-400 text-xl mb-4">
-                        {provider.service_category}
-                      </p>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-2xl font-black">
+                            {provider.full_name || "Unnamed Provider"}
+                          </h3>
 
-                      <div className="flex flex-wrap gap-4">
-
-                        <div className="bg-zinc-900 px-5 py-3 rounded-2xl">
-                          AI:
-                          {" "}
-                          <span className="text-green-400 font-black">
-                            {provider.ai_score || 0}
-                          </span>
+                          {provider.approved && <Badge text="APPROVED" color="green" />}
+                          {provider.verified && <Badge text="VERIFIED" color="blue" />}
+                          {provider.premium && <Badge text="PREMIUM" color="yellow" />}
+                          {provider.featured && <Badge text="FEATURED" color="red" />}
                         </div>
 
-                        <div className="bg-zinc-900 px-5 py-3 rounded-2xl">
-                          Trust:
-                          {" "}
-                          <span className="text-blue-400 font-black">
-                            {provider.trust_score || 0}
-                          </span>
-                        </div>
+                        <p className="mt-2 text-zinc-400">
+                          {provider.service_category || "No category"} ·{" "}
+                          {provider.city || "No city"}
+                        </p>
 
-                        <div className="bg-zinc-900 px-5 py-3 rounded-2xl">
-                          Bookings:
-                          {" "}
-                          <span className="font-black">
-                            {provider.total_bookings || 0}
-                          </span>
-                        </div>
+                        <p className="mt-1 text-sm text-zinc-600">
+                          {provider.phone || "No phone"}
+                        </p>
 
+                        <div className="mt-4 flex flex-wrap gap-3">
+                          <SmallMetric label="AI" value={provider.ai_score || 0} />
+                          <SmallMetric
+                            label="Trust"
+                            value={provider.trust_score || 0}
+                          />
+                          <SmallMetric
+                            label="Bookings"
+                            value={provider.total_bookings || 0}
+                          />
+                        </div>
                       </div>
-
                     </div>
 
-                  </div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[430px]">
+                      {!provider.approved && (
+                        <AdminButton
+                          text="Approve"
+                          loading={actionLoading === `${provider.id}-approve`}
+                          className="bg-green-500 text-black hover:bg-green-400"
+                          onClick={() =>
+                            updateProvider(
+                              provider.id,
+                              { approved: true },
+                              "approve"
+                            )
+                          }
+                        />
+                      )}
 
-                  <div className="grid md:grid-cols-3 gap-4 min-w-[500px]">
-
-                    {!provider.approved && (
-
-                      <button
+                      <AdminButton
+                        text={provider.verified ? "Unverify" : "Verify"}
+                        loading={actionLoading === `${provider.id}-verify`}
+                        className="bg-blue-500 hover:bg-blue-400"
                         onClick={() =>
-                          approveProvider(
-                            provider.id
+                          updateProvider(
+                            provider.id,
+                            { verified: !provider.verified },
+                            "verify"
                           )
                         }
-                        className="bg-green-500 hover:bg-green-600 h-16 rounded-2xl font-black transition"
-                      >
-                        Approve
-                      </button>
+                      />
 
-                    )}
+                      <AdminButton
+                        text={provider.premium ? "Remove Premium" : "Make Premium"}
+                        loading={actionLoading === `${provider.id}-premium`}
+                        className="bg-yellow-400 text-black hover:bg-yellow-300"
+                        onClick={() =>
+                          updateProvider(
+                            provider.id,
+                            { premium: !provider.premium },
+                            "premium"
+                          )
+                        }
+                      />
 
-                    <button
-                      onClick={() =>
-                        togglePremium(
-                          provider.id,
-                          provider.premium
-                        )
-                      }
-                      className="bg-yellow-500 hover:bg-yellow-600 text-black h-16 rounded-2xl font-black transition"
-                    >
-                      {provider.premium
-                        ? "Remove Premium"
-                        : "Make Premium"}
-                    </button>
+                      <AdminButton
+                        text={provider.featured ? "Unfeature" : "Feature"}
+                        loading={actionLoading === `${provider.id}-featured`}
+                        className="bg-red-500 hover:bg-red-400"
+                        onClick={() =>
+                          updateProvider(
+                            provider.id,
+                            { featured: !provider.featured },
+                            "featured"
+                          )
+                        }
+                      />
 
-                    <button
-                      onClick={() =>
-                        toggleFeatured(
-                          provider.id,
-                          provider.featured
-                        )
-                      }
-                      className="bg-red-500 hover:bg-red-600 h-16 rounded-2xl font-black transition"
-                    >
-                      {provider.featured
-                        ? "Unfeature"
-                        : "Feature"}
-                    </button>
+                      <AdminButton
+                        text="Boost AI +10"
+                        loading={actionLoading === `${provider.id}-ai`}
+                        className="bg-white text-black hover:bg-zinc-200"
+                        onClick={() =>
+                          updateProvider(
+                            provider.id,
+                            { ai_score: (provider.ai_score || 0) + 10 },
+                            "ai"
+                          )
+                        }
+                      />
 
-                    <button
-                      onClick={() =>
-                        toggleVerified(
-                          provider.id,
-                          provider.verified
-                        )
-                      }
-                      className="bg-blue-500 hover:bg-blue-600 h-16 rounded-2xl font-black transition"
-                    >
-                      {provider.verified
-                        ? "Unverify"
-                        : "Verify"}
-                    </button>
+                      <AdminButton
+                        text="Boost Trust +10"
+                        loading={actionLoading === `${provider.id}-trust`}
+                        className="bg-zinc-800 hover:bg-zinc-700"
+                        onClick={() =>
+                          updateProvider(
+                            provider.id,
+                            { trust_score: (provider.trust_score || 0) + 10 },
+                            "trust"
+                          )
+                        }
+                      />
 
-                    <button
-                      onClick={() =>
-                        boostAI(
-                          provider.id,
-                          provider.ai_score
-                        )
-                      }
-                      className="bg-white text-black hover:scale-[1.03] h-16 rounded-2xl font-black transition"
-                    >
-                      Boost AI
-                    </button>
-
-                    <button
-                      onClick={() =>
-                        boostTrust(
-                          provider.id,
-                          provider.trust_score
-                        )
-                      }
-                      className="bg-zinc-800 hover:bg-zinc-700 h-16 rounded-2xl font-black transition"
-                    >
-                      Boost Trust
-                    </button>
-
-                    <button
-                      onClick={() =>
-                        removeProvider(
-                          provider.id
-                        )
-                      }
-                      className="bg-red-950 hover:bg-red-900 h-16 rounded-2xl font-black transition md:col-span-3"
-                    >
-                      Remove Provider
-                    </button>
-
+                      <AdminButton
+                        text="Remove Provider"
+                        loading={actionLoading === `${provider.id}-remove`}
+                        className="bg-red-950 hover:bg-red-900 sm:col-span-2"
+                        onClick={() => removeProvider(provider.id)}
+                      />
+                    </div>
                   </div>
-
                 </div>
-
-              </div>
-
-            ))}
-
-          </div>
-
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-8">
-
-          <div className="glass-heavy rounded-[40px] p-10">
-
-            <h2 className="text-5xl font-black mb-10">
+        <div className="mt-10 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="rounded-[36px] border border-white/10 bg-white/[0.055] p-5 shadow-2xl backdrop-blur-xl md:p-8">
+            <h2 className="mb-6 text-3xl font-black md:text-5xl">
               Live Bookings
             </h2>
 
-            <div className="space-y-5">
+            {bookings.length === 0 ? (
+              <p className="rounded-3xl bg-black/50 p-6 text-zinc-500">
+                No bookings found.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {bookings.map((booking) => (
+                  <div
+                    key={booking.id}
+                    className="rounded-3xl border border-white/10 bg-black/55 p-5"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-black">
+                          {booking.customer_name || "Customer"}
+                        </h3>
 
-              {bookings.map((booking) => (
+                        <p className="mt-1 text-sm text-zinc-500">
+                          {booking.city || booking.address || "No location"}
+                        </p>
 
-                <div
-                  key={booking.id}
-                  className="bg-black rounded-[28px] p-6 border border-white/5"
-                >
+                        <p className="mt-3 text-zinc-400">
+                          {booking.notes || booking.message || "No booking note"}
+                        </p>
+                      </div>
 
-                  <div className="flex items-center justify-between">
-
-                    <div>
-
-                      <h3 className="text-2xl font-black mb-2">
-                        {booking.customer_name}
-                      </h3>
-
-                      <p className="text-zinc-500">
-                        {booking.message}
-                      </p>
-
+                      <span className="rounded-full bg-green-400/10 px-4 py-2 text-xs font-black uppercase text-green-300">
+                        {booking.status || "pending"}
+                      </span>
                     </div>
-
-                    <div className="text-right">
-
-                      <p className="text-green-400 font-black text-lg mb-2">
-                        {booking.status}
-                      </p>
-
-                      <p className="text-zinc-500 text-sm">
-                        Live Booking
-                      </p>
-
-                    </div>
-
                   </div>
-
-                </div>
-
-              ))}
-
-            </div>
-
+                ))}
+              </div>
+            )}
           </div>
 
-          <div className="glass-heavy rounded-[40px] p-10">
-
-            <h2 className="text-5xl font-black mb-10">
-              AI Marketplace Status
+          <div className="rounded-[36px] border border-white/10 bg-white/[0.055] p-5 shadow-2xl backdrop-blur-xl md:p-8">
+            <h2 className="mb-6 text-3xl font-black md:text-5xl">
+              Marketplace Health
             </h2>
 
-            <div className="space-y-6">
-
-              <div className="bg-black rounded-[30px] p-8">
-
-                <p className="text-zinc-500 mb-4">
-                  AI Matching Accuracy
-                </p>
-
-                <h3 className="text-6xl font-black text-green-400">
-                  98%
-                </h3>
-
-              </div>
-
-              <div className="bg-black rounded-[30px] p-8">
-
-                <p className="text-zinc-500 mb-4">
-                  Realtime Activity
-                </p>
-
-                <h3 className="text-6xl font-black text-red-400">
-                  LIVE
-                </h3>
-
-              </div>
-
-              <div className="bg-black rounded-[30px] p-8">
-
-                <p className="text-zinc-500 mb-4">
-                  Marketplace Growth
-                </p>
-
-                <h3 className="text-6xl font-black text-blue-400">
-                  +42%
-                </h3>
-
-              </div>
-
+            <div className="space-y-4">
+              <HealthCard title="AI Matching Accuracy" value="98%" color="green" />
+              <HealthCard title="Realtime Activity" value="LIVE" color="red" />
+              <HealthCard title="Growth Signal" value="+42%" color="blue" />
             </div>
-
           </div>
-
         </div>
-
       </section>
-
     </main>
+  );
+}
+
+function StatCard({
+  title,
+  value,
+  green = false,
+  red = false,
+}: {
+  title: string;
+  value: string | number;
+  green?: boolean;
+  red?: boolean;
+}) {
+  return (
+    <div className="rounded-[30px] border border-white/10 bg-white/[0.055] p-6 shadow-xl backdrop-blur-xl">
+      <p className="text-sm font-bold text-zinc-500">{title}</p>
+      <h3
+        className={`mt-3 text-4xl font-black ${
+          green ? "text-green-300" : red ? "text-red-300" : "text-white"
+        }`}
+      >
+        {value}
+      </h3>
+    </div>
+  );
+}
+
+function SmallMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-2xl bg-zinc-900 px-4 py-3">
+      <p className="text-xs font-bold text-zinc-500">{label}</p>
+      <p className="text-lg font-black">{value}</p>
+    </div>
+  );
+}
+
+function Badge({
+  text,
+  color,
+}: {
+  text: string;
+  color: "green" | "blue" | "yellow" | "red";
+}) {
+  const classes = {
+    green: "bg-green-400/10 text-green-300",
+    blue: "bg-blue-400/10 text-blue-300",
+    yellow: "bg-yellow-400 text-black",
+    red: "bg-red-500/20 text-red-200",
+  };
+
+  return (
+    <span className={`rounded-full px-3 py-1 text-xs font-black ${classes[color]}`}>
+      {text}
+    </span>
+  );
+}
+
+function AdminButton({
+  text,
+  onClick,
+  loading,
+  className,
+}: {
+  text: string;
+  onClick: () => void;
+  loading: boolean;
+  className: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={loading}
+      className={`min-h-14 rounded-2xl px-4 py-3 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+    >
+      {loading ? "Working..." : text}
+    </button>
+  );
+}
+
+function HealthCard({
+  title,
+  value,
+  color,
+}: {
+  title: string;
+  value: string;
+  color: "green" | "red" | "blue";
+}) {
+  const colors = {
+    green: "text-green-300",
+    red: "text-red-300",
+    blue: "text-blue-300",
+  };
+
+  return (
+    <div className="rounded-3xl border border-white/10 bg-black/55 p-6">
+      <p className="text-sm font-bold text-zinc-500">{title}</p>
+      <h3 className={`mt-3 text-5xl font-black ${colors[color]}`}>{value}</h3>
+    </div>
   );
 }
