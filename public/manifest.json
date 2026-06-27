@@ -1,0 +1,16 @@
+{
+  "name": "EKA Marketplace",
+  "short_name": "EKA",
+  "description": "Nepal Home Services Marketplace",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#ef4444",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}
