@@ -6,7 +6,6 @@ export const REVENUE_CONFIG = {
 
 export function calculateRevenue(totalAmount: number) {
   const cleanAmount = Number(totalAmount || 0);
-
   const platformFee = Math.round(cleanAmount * REVENUE_CONFIG.commissionRate);
   const cashbackAmount = Math.round(cleanAmount * REVENUE_CONFIG.cashbackRate);
   const providerEarning = cleanAmount - platformFee;

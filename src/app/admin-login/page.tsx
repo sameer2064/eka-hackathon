@@ -5,21 +5,15 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-export default function LoginPage() {
+export default function AdminLoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState("admin@eka.com");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function login() {
     setMessage("");
-
-    if (!email || !password) {
-      setMessage("Enter email and password.");
-      return;
-    }
-
     setLoading(true);
 
     const { data, error } = await supabase.auth.signInWithPassword({
@@ -33,40 +27,42 @@ export default function LoginPage() {
       return;
     }
 
-    const user = data.user;
-
     const { data: profile } = await supabase
       .from("profiles")
       .select("role")
-      .eq("id", user.id)
+      .eq("id", data.user.id)
       .single();
 
-    const role = profile?.role || "customer";
+    if (profile?.role !== "admin") {
+      await supabase.auth.signOut();
+      setMessage("Access denied. This is not an admin account.");
+      setLoading(false);
+      return;
+    }
 
+    router.push("/admin/revenue");
     setLoading(false);
-
-    if (role === "admin") router.push("/admin/revenue");
-    else if (role === "provider") router.push("/provider-dashboard");
-    else router.push("/customer");
   }
 
   return (
     <main className="min-h-screen bg-[#07080a] px-5 py-14 text-white">
       <section className="mx-auto max-w-xl">
-        <p className="mb-4 text-sm font-black uppercase tracking-[0.28em] text-orange-300">
-          Login
+        <p className="mb-4 text-sm font-black uppercase tracking-[0.28em] text-red-300">
+          Admin Access
         </p>
 
-        <h1 className="text-5xl font-black tracking-[-0.05em]">Welcome back.</h1>
+        <h1 className="text-5xl font-black tracking-[-0.05em]">
+          Platform control login.
+        </h1>
 
         <p className="mt-4 leading-7 text-zinc-400">
-          EKA sends you to your correct workspace automatically.
+          Only admin-role accounts can enter revenue and control panels.
         </p>
 
         <div className="mt-8 rounded-[34px] border border-white/10 bg-white/[0.055] p-6 shadow-2xl backdrop-blur-xl">
-          <Input label="Email" value={email} setValue={setEmail} type="email" />
+          <Input label="Admin email" value={email} setValue={setEmail} />
           <div className="mt-4">
-            <Input label="Password" value={password} setValue={setPassword} type="password" />
+            <Input label="Admin password" value={password} setValue={setPassword} type="password" />
           </div>
 
           {message && (
@@ -78,25 +74,17 @@ export default function LoginPage() {
           <button
             onClick={login}
             disabled={loading}
-            className="mt-6 w-full rounded-2xl bg-white px-5 py-4 font-black text-black disabled:opacity-60"
+            className="mt-6 w-full rounded-2xl bg-red-500 px-5 py-4 font-black text-white disabled:opacity-60"
           >
-            {loading ? "Logging in..." : "Login"}
+            {loading ? "Checking..." : "Enter Admin Panel"}
           </button>
 
-          <div className="mt-5 flex flex-col gap-3 text-center text-sm font-bold text-zinc-500">
-            <p>
-              New to EKA?{" "}
-              <Link href="/signup" className="text-white">
-                Create account
-              </Link>
-            </p>
-            <p>
-              Platform owner?{" "}
-              <Link href="/admin-login" className="text-orange-300">
-                Admin login
-              </Link>
-            </p>
-          </div>
+          <p className="mt-5 text-center text-sm font-bold text-zinc-500">
+            Normal user?{" "}
+            <Link href="/login" className="text-white">
+              User login
+            </Link>
+          </p>
         </div>
       </section>
     </main>
@@ -122,7 +110,7 @@ function Input({
         onChange={(e) => setValue(e.target.value)}
         type={type}
         placeholder={label}
-        className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-4 font-bold text-white outline-none placeholder:text-zinc-700 focus:border-orange-400/60"
+        className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-4 font-bold text-white outline-none placeholder:text-zinc-700 focus:border-red-400/60"
       />
     </label>
   );

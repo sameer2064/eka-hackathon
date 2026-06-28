@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import {
   calculateRevenue,
@@ -9,457 +8,374 @@ import {
   generateServiceCode,
   getWarrantyDate,
 } from "@/lib/revenue";
-
-type Provider = any;
-type Booking = any;
+import { createNotification } from "@/lib/ekaActions";
 
 export default function ProtectedBookingPage() {
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [recentBookings, setRecentBookings] = useState<Booking[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [providers, setProviders] = useState<any[]>([]);
+  const [providerId, setProviderId] = useState("");
+  const [providerSearch, setProviderSearch] = useState("");
+
+  const [customerName, setCustomerName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [city, setCity] = useState("");
+  const [address, setAddress] = useState("");
+  const [notes, setNotes] = useState("");
+  const [amount, setAmount] = useState("2000");
   const [message, setMessage] = useState("");
 
-  const [form, setForm] = useState({
-    provider_id: "",
-    customer_name: "",
-    phone: "",
-    city: "",
-    address: "",
-    notes: "",
-    total_amount: "2000",
+  const split = useMemo(() => calculateRevenue(Number(amount || 0)), [amount]);
+
+  const filteredProviders = providers.filter((provider) => {
+    const q = providerSearch.toLowerCase();
+    return (
+      provider.full_name?.toLowerCase().includes(q) ||
+      provider.service_category?.toLowerCase().includes(q) ||
+      provider.city?.toLowerCase().includes(q)
+    );
   });
 
-  const revenue = useMemo(
-    () => calculateRevenue(Number(form.total_amount || 0)),
-    [form.total_amount]
-  );
-
-  const selectedProvider = providers.find((p) => p.id === form.provider_id);
+  const selectedProvider = providers.find((provider) => provider.id === providerId);
 
   useEffect(() => {
-    loadData();
-
-    const channel = supabase
-      .channel("protected-booking-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "bookings" },
-        () => {
-          loadRecentBookings();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    loadProviders();
   }, []);
 
-  async function loadData() {
-    await Promise.all([loadProviders(), loadRecentBookings()]);
-  }
-
   async function loadProviders() {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("providers")
       .select("*")
-      .order("created_at", { ascending: false });
+      .eq("approved", true)
+      .order("verified", { ascending: false })
+      .order("premium", { ascending: false })
+      .order("trust_score", { ascending: false });
+
+    setProviders(data || []);
+    if (data && data.length > 0) setProviderId(data[0].id);
+  }
+
+  async function createBooking() {
+    setMessage("");
+
+    const { data: userData } = await supabase.auth.getUser();
+    const user = userData.user;
+
+    if (!user) {
+      setMessage("Please login as customer first.");
+      return;
+    }
+
+    if (!providerId) {
+      setMessage("Please choose a provider.");
+      return;
+    }
+
+    if (!customerName || !phone || !city || !address || !amount) {
+      setMessage("Fill all required fields.");
+      return;
+    }
+
+    const serviceCode = generateServiceCode();
+
+    const { data: booking, error } = await supabase
+      .from("bookings")
+      .insert({
+        provider_id: providerId,
+        customer_id: user.id,
+        user_id: user.id,
+        customer_name: customerName,
+        phone,
+        city,
+        address,
+        notes,
+        message: notes,
+        status: "pending",
+        total_amount: split.totalAmount,
+        platform_fee: split.platformFee,
+        cashback_amount: split.cashbackAmount,
+        provider_earning: split.providerEarning,
+        service_code: serviceCode,
+        payment_status: "pending",
+        cashback_status: "pending",
+        warranty_status: "active",
+        warranty_until: getWarrantyDate(),
+        provider_phone_hidden: true,
+        customer_reviewed: false,
+      })
+      .select()
+      .single();
 
     if (error) {
       setMessage(error.message);
       return;
     }
 
-    setProviders(data || []);
+    await createNotification({
+      userId: selectedProvider?.owner_id,
+      actorId: user.id,
+      bookingId: booking.id,
+      title: "New job request",
+      content: `${customerName} requested ${
+        selectedProvider?.service_category || "service"
+      } in ${city}. Estimated earning: ${formatMoney(split.providerEarning)}.`,
+      type: "new_job",
+    });
 
-    if (data && data.length > 0) {
-      setForm((prev) => ({
-        ...prev,
-        provider_id: prev.provider_id || data[0].id,
-      }));
-    }
-  }
-
-  async function loadRecentBookings() {
-    const { data } = await supabase
-      .from("bookings")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(8);
-
-    setRecentBookings(data || []);
-  }
-
-  async function createProtectedBooking() {
-    setLoading(true);
-    setMessage("");
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    const serviceCode = generateServiceCode();
-    const warrantyUntil = getWarrantyDate();
-
-    const payload = {
-      provider_id: form.provider_id,
-      user_id: user?.id || null,
-      customer_name: form.customer_name || "Demo Customer",
-      phone: form.phone || "9800000000",
-      city: form.city || "Kathmandu",
-      address: form.address || "Demo address",
-      notes: form.notes || "Protected booking demo",
-      message: form.notes || "Protected booking demo",
-      status: "pending",
-      total_amount: revenue.totalAmount,
-      commission_rate: revenue.commissionRate,
-      platform_fee: revenue.platformFee,
-      cashback_amount: revenue.cashbackAmount,
-      provider_earning: revenue.providerEarning,
-      service_code: serviceCode,
-      payment_status: "demo_pending",
-      cashback_status: "not_credited",
-      warranty_status: "active",
-      warranty_until: warrantyUntil,
-      provider_phone_hidden: true,
-    };
-
-    const { data: booking, error: bookingError } = await supabase
-      .from("bookings")
-      .insert(payload)
-      .select()
-      .single();
-
-    if (bookingError) {
-      setLoading(false);
-      setMessage(`Booking error: ${bookingError.message}`);
-      return;
-    }
-
-    await supabase.from("payments").insert({
-      booking_id: String(booking.id),
-      user_id: user?.id || null,
-      provider_id: form.provider_id,
-      amount: revenue.totalAmount,
-      platform_fee: revenue.platformFee,
-      cashback_amount: revenue.cashbackAmount,
-      provider_earning: revenue.providerEarning,
-      status: "demo_pending",
-      payment_method: "demo",
+    await createNotification({
+      userId: user.id,
+      bookingId: booking.id,
+      title: "Booking created",
+      content: `Your protected booking was created. Service code: ${serviceCode}.`,
+      type: "booking_created",
     });
 
     setMessage(
-      `Protected booking created. Service Code: ${serviceCode}. Platform fee: ${formatMoney(
-        revenue.platformFee
-      )}. Cashback: ${formatMoney(revenue.cashbackAmount)}.`
+      `Booking created. Provider notified. Code: ${serviceCode}. Cashback: ${formatMoney(
+        split.cashbackAmount
+      )}.`
     );
-
-    setForm((prev) => ({
-      ...prev,
-      customer_name: "",
-      phone: "",
-      address: "",
-      notes: "",
-    }));
-
-    setLoading(false);
-    loadRecentBookings();
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[#050505] text-white">
-      <div className="fixed inset-0 -z-10">
-        <div className="absolute left-0 top-0 h-[500px] w-[500px] rounded-full bg-red-500/20 blur-[130px]" />
-        <div className="absolute right-0 top-32 h-[450px] w-[450px] rounded-full bg-orange-500/10 blur-[120px]" />
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.045)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.045)_1px,transparent_1px)] bg-[size:64px_64px]" />
+    <div>
+      <div className="mb-8">
+        <p className="mb-4 text-sm font-black uppercase tracking-[0.28em] text-sky-300">
+          Protected Booking
+        </p>
+
+        <h1 className="text-5xl font-black tracking-[-0.05em] md:text-7xl">
+          Choose provider easily.
+        </h1>
+
+        <p className="mt-5 max-w-3xl text-lg leading-8 text-zinc-400">
+          Search by name, city, or service. Pick a provider card and create protected booking.
+        </p>
       </div>
 
-      <section className="mx-auto max-w-7xl px-5 py-14 md:py-20">
-        <div className="mb-10">
-          <p className="mb-4 text-sm font-black uppercase tracking-[0.35em] text-red-400">
-            EKA Protected Booking
-          </p>
+      <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
+        <Panel>
+          <div className="mb-6">
+            <p className="mb-2 text-sm font-black text-zinc-500">
+              Search provider
+            </p>
 
-          <h1 className="max-w-5xl text-5xl font-black leading-tight tracking-tight md:text-7xl">
-            Stop bypass. Add warranty, commission and cashback.
-          </h1>
-
-          <p className="mt-5 max-w-3xl text-lg leading-8 text-zinc-400">
-            Customers get service protection and cashback. Providers get verified
-            leads. EKA earns platform commission per completed booking.
-          </p>
-
-          <div className="mt-7 flex flex-wrap gap-4">
-            <Link
-              href="/admin/revenue"
-              className="rounded-full bg-white px-6 py-3 text-sm font-black text-black"
-            >
-              Open Revenue Dashboard
-            </Link>
-
-            <Link
-              href="/pricing"
-              className="rounded-full border border-white/10 bg-white/[0.07] px-6 py-3 text-sm font-black"
-            >
-              View Pricing
-            </Link>
+            <input
+              value={providerSearch}
+              onChange={(event) => setProviderSearch(event.target.value)}
+              placeholder="Search plumber, electrician, Kathmandu..."
+              className="w-full rounded-2xl border border-white/10 bg-black/45 px-5 py-4 font-bold text-white outline-none placeholder:text-zinc-700 focus:border-red-400/50"
+            />
           </div>
-        </div>
 
-        {message && (
-          <div className="mb-8 rounded-3xl border border-green-400/20 bg-green-400/10 p-5 text-green-200">
-            {message}
-          </div>
-        )}
-
-        <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-          <div className="rounded-[36px] border border-white/10 bg-white/[0.055] p-6 shadow-2xl backdrop-blur-xl">
-            <h2 className="mb-6 text-3xl font-black">Create Protected Booking</h2>
-
-            <div className="space-y-4">
-              <Field label="Provider">
-                <select
-                  value={form.provider_id}
-                  onChange={(e) =>
-                    setForm({ ...form, provider_id: e.target.value })
-                  }
-                  className="w-full rounded-2xl border border-white/10 bg-black px-4 py-4 font-bold text-white outline-none"
-                >
-                  {providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.full_name || "Unnamed Provider"} —{" "}
-                      {provider.service_category || "Service"} —{" "}
-                      {provider.city || "City"}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field label="Customer Name">
-                <input
-                  value={form.customer_name}
-                  onChange={(e) =>
-                    setForm({ ...form, customer_name: e.target.value })
-                  }
-                  placeholder="Sameer Pathak"
-                  className="input"
-                />
-              </Field>
-
-              <Field label="Phone">
-                <input
-                  value={form.phone}
-                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                  placeholder="98XXXXXXXX"
-                  className="input"
-                />
-              </Field>
-
-              <Field label="City">
-                <input
-                  value={form.city}
-                  onChange={(e) => setForm({ ...form, city: e.target.value })}
-                  placeholder="Kathmandu"
-                  className="input"
-                />
-              </Field>
-
-              <Field label="Address">
-                <input
-                  value={form.address}
-                  onChange={(e) =>
-                    setForm({ ...form, address: e.target.value })
-                  }
-                  placeholder="Full address"
-                  className="input"
-                />
-              </Field>
-
-              <Field label="Service Note">
-                <textarea
-                  value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  placeholder="Example: Fix electric wiring in room"
-                  className="input min-h-28"
-                />
-              </Field>
-
-              <Field label="Estimated Service Amount">
-                <input
-                  value={form.total_amount}
-                  onChange={(e) =>
-                    setForm({ ...form, total_amount: e.target.value })
-                  }
-                  type="number"
-                  className="input"
-                />
-              </Field>
-
-              <button
-                onClick={createProtectedBooking}
-                disabled={loading || !form.provider_id}
-                className="w-full rounded-2xl bg-gradient-to-r from-red-500 to-orange-500 px-6 py-5 font-black text-white shadow-[0_20px_80px_rgba(239,68,68,0.35)] transition hover:scale-[1.02] disabled:opacity-50"
-              >
-                {loading ? "Creating..." : "Create Protected Booking"}
-              </button>
+          {providers.length === 0 ? (
+            <div className="rounded-3xl border border-orange-400/20 bg-orange-500/10 p-6">
+              <h2 className="text-2xl font-black text-orange-200">
+                No approved providers yet.
+              </h2>
+              <p className="mt-2 text-orange-100/80">
+                Admin must approve providers first.
+              </p>
             </div>
-          </div>
-
-          <div className="space-y-6">
-            <div className="rounded-[36px] border border-white/10 bg-white/[0.055] p-6 shadow-2xl backdrop-blur-xl">
-              <h2 className="mb-6 text-3xl font-black">Revenue Split</h2>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <Metric title="Customer Pays" value={formatMoney(revenue.totalAmount)} />
-                <Metric title="EKA Commission" value={formatMoney(revenue.platformFee)} red />
-                <Metric title="Provider Gets" value={formatMoney(revenue.providerEarning)} green />
-                <Metric title="Customer Cashback" value={formatMoney(revenue.cashbackAmount)} blue />
-              </div>
-
-              <div className="mt-6 rounded-3xl border border-white/10 bg-black/45 p-5">
-                <p className="font-black">Selected Provider</p>
-                <p className="mt-2 text-zinc-400">
-                  {selectedProvider
-                    ? `${selectedProvider.full_name || "Provider"} · ${
-                        selectedProvider.service_category || "Service"
-                      } · ${selectedProvider.city || "City"}`
-                    : "No provider selected"}
+          ) : (
+            <div className="mb-8 grid max-h-[420px] gap-3 overflow-y-auto pr-1">
+              {filteredProviders.length === 0 ? (
+                <p className="rounded-2xl bg-white/[0.05] p-4 font-bold text-zinc-500">
+                  No matching provider found.
                 </p>
+              ) : (
+                filteredProviders.map((provider) => {
+                  const active = provider.id === providerId;
 
-                <p className="mt-4 text-sm text-zinc-500">
-                  Phone number stays hidden until protected booking is created.
-                  Direct call gives no warranty, no cashback, no invoice and no
-                  dispute support.
-                </p>
-              </div>
-            </div>
-
-            <div className="rounded-[36px] border border-white/10 bg-white/[0.055] p-6 shadow-2xl backdrop-blur-xl">
-              <div className="mb-5 flex items-center justify-between">
-                <h2 className="text-3xl font-black">Live Bookings</h2>
-                <span className="rounded-full bg-green-400/10 px-4 py-2 text-xs font-black text-green-300">
-                  REALTIME
-                </span>
-              </div>
-
-              <div className="space-y-4">
-                {recentBookings.length === 0 ? (
-                  <p className="rounded-3xl bg-black/45 p-5 text-zinc-500">
-                    No bookings yet.
-                  </p>
-                ) : (
-                  recentBookings.map((booking) => (
-                    <div
-                      key={booking.id}
-                      className="rounded-3xl border border-white/10 bg-black/45 p-5"
+                  return (
+                    <button
+                      key={provider.id}
+                      onClick={() => setProviderId(provider.id)}
+                      className={`rounded-[26px] border p-5 text-left transition hover:-translate-y-0.5 ${
+                        active
+                          ? "border-red-400/50 bg-red-500/10 shadow-[0_0_40px_rgba(239,68,68,0.12)]"
+                          : "border-white/10 bg-black/35 hover:border-white/20"
+                      }`}
                     >
-                      <div className="flex items-start justify-between gap-4">
+                      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
                         <div>
-                          <h3 className="font-black">
-                            {booking.customer_name || "Customer"}
-                          </h3>
-                          <p className="mt-1 text-sm text-zinc-500">
-                            {booking.city || "No city"} ·{" "}
-                            {formatMoney(booking.total_amount)}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-2xl font-black text-white">
+                              {provider.full_name || "Provider"}
+                            </h3>
+
+                            {provider.verified && <Badge text="Verified" />}
+                            {provider.premium && <Badge text="Premium" />}
+                          </div>
+
+                          <p className="mt-2 font-bold text-zinc-400">
+                            {provider.service_category || "Service"} ·{" "}
+                            {provider.city || "Nepal"}
+                          </p>
+
+                          <p className="mt-2 line-clamp-2 text-sm leading-6 text-zinc-500">
+                            {provider.description || "Trusted provider on EKA."}
                           </p>
                         </div>
 
-                        <span className="rounded-full bg-red-500/10 px-3 py-1 text-xs font-black uppercase text-red-300">
-                          {booking.status || "pending"}
-                        </span>
+                        <div className="grid grid-cols-2 gap-3 md:w-[190px]">
+                          <Mini title="Trust" value={provider.trust_score || 70} />
+                          <Mini title="AI" value={provider.ai_score || 70} />
+                        </div>
                       </div>
 
-                      <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
-                        <Small label="Fee" value={formatMoney(booking.platform_fee)} />
-                        <Small label="Cashback" value={formatMoney(booking.cashback_amount)} />
-                        <Small label="Code" value={booking.service_code || "-"} />
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+                      {active && (
+                        <p className="mt-4 rounded-2xl bg-red-500/15 px-4 py-3 text-sm font-black text-red-100">
+                          Selected for this booking
+                        </p>
+                      )}
+                    </button>
+                  );
+                })
+              )}
             </div>
+          )}
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <Input label="Customer name" value={customerName} setValue={setCustomerName} />
+            <Input label="Phone" value={phone} setValue={setPhone} />
+            <Input label="City" value={city} setValue={setCity} />
+            <Input label="Address" value={address} setValue={setAddress} />
+            <Input label="Service amount" value={amount} setValue={setAmount} type="number" />
+            <Input label="Service note" value={notes} setValue={setNotes} />
           </div>
-        </div>
-      </section>
 
-      <style jsx global>{`
-        .input {
-          width: 100%;
-          border-radius: 1rem;
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          background: rgba(0, 0, 0, 0.55);
-          padding: 1rem;
-          color: white;
-          font-weight: 700;
-          outline: none;
-        }
+          {message && (
+            <p className="mt-5 rounded-2xl border border-green-400/20 bg-green-500/10 px-4 py-3 text-sm font-bold text-green-200">
+              {message}
+            </p>
+          )}
 
-        .input::placeholder {
-          color: rgb(113, 113, 122);
-        }
+          <button
+            onClick={createBooking}
+            disabled={providers.length === 0}
+            className="mt-6 w-full rounded-2xl bg-red-500 px-5 py-4 font-black text-white shadow-[0_0_35px_rgba(239,68,68,0.22)] transition hover:bg-red-400 disabled:opacity-40"
+          >
+            Create Protected Booking
+          </button>
+        </Panel>
 
-        .input:focus {
-          border-color: rgba(248, 113, 113, 0.7);
-        }
-      `}</style>
-    </main>
-  );
-}
+        <Panel>
+          <p className="text-sm font-black uppercase tracking-[0.25em] text-green-300">
+            Live money split
+          </p>
 
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <p className="mb-2 text-sm font-black text-zinc-400">{label}</p>
-      {children}
-    </label>
-  );
-}
+          <div className="mt-6 space-y-3">
+            <Row label="Customer pays" value={formatMoney(split.totalAmount)} />
+            <Row label="EKA commission" value={formatMoney(split.platformFee)} green />
+            <Row label="Provider earns" value={formatMoney(split.providerEarning)} blue />
+            <Row label="Customer cashback" value={formatMoney(split.cashbackAmount)} orange />
+          </div>
 
-function Metric({
-  title,
-  value,
-  red,
-  green,
-  blue,
-}: {
-  title: string;
-  value: string;
-  red?: boolean;
-  green?: boolean;
-  blue?: boolean;
-}) {
-  return (
-    <div className="rounded-3xl border border-white/10 bg-black/45 p-5">
-      <p className="text-sm font-bold text-zinc-500">{title}</p>
-      <h3
-        className={`mt-2 text-3xl font-black ${
-          red
-            ? "text-red-300"
-            : green
-            ? "text-green-300"
-            : blue
-            ? "text-blue-300"
-            : "text-white"
-        }`}
-      >
-        {value}
-      </h3>
+          <div className="mt-6 rounded-3xl border border-white/10 bg-white/[0.05] p-5">
+            <h3 className="text-xl font-black">Why users stay inside EKA</h3>
+            <p className="mt-3 leading-7 text-zinc-400">
+              Direct phone calls give no cashback, warranty, service code, booking proof,
+              or dispute support.
+            </p>
+          </div>
+
+          {selectedProvider && (
+            <div className="mt-6 rounded-3xl border border-red-400/20 bg-red-500/10 p-5">
+              <p className="text-sm font-black uppercase tracking-[0.22em] text-red-200">
+                Selected provider
+              </p>
+              <h3 className="mt-3 text-2xl font-black">
+                {selectedProvider.full_name}
+              </h3>
+              <p className="mt-2 text-zinc-400">
+                {selectedProvider.service_category} · {selectedProvider.city}
+              </p>
+            </div>
+          )}
+        </Panel>
+      </div>
     </div>
   );
 }
 
-function Small({ label, value }: { label: string; value: string }) {
+function Panel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-2xl bg-zinc-900 p-3">
-      <p className="text-zinc-500">{label}</p>
+    <div className="rounded-[34px] border border-white/10 bg-white/[0.055] p-6 shadow-2xl backdrop-blur-xl">
+      {children}
+    </div>
+  );
+}
+
+function Input({
+  label,
+  value,
+  setValue,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  setValue: (value: string) => void;
+  type?: string;
+}) {
+  return (
+    <label>
+      <p className="mb-2 text-sm font-black text-zinc-500">{label}</p>
+      <input
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        type={type}
+        placeholder={label}
+        className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-4 font-bold text-white outline-none placeholder:text-zinc-700 focus:border-red-400/50"
+      />
+    </label>
+  );
+}
+
+function Badge({ text }: { text: string }) {
+  return (
+    <span className="rounded-full bg-green-400/10 px-3 py-1 text-xs font-black uppercase text-green-300">
+      {text}
+    </span>
+  );
+}
+
+function Mini({ title, value }: { title: string; value: string | number }) {
+  return (
+    <div className="rounded-2xl bg-white/[0.055] p-3 text-center">
+      <p className="text-xs font-bold text-zinc-500">{title}</p>
       <p className="mt-1 font-black text-white">{value}</p>
+    </div>
+  );
+}
+
+function Row({
+  label,
+  value,
+  green,
+  blue,
+  orange,
+}: {
+  label: string;
+  value: string;
+  green?: boolean;
+  blue?: boolean;
+  orange?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-2xl bg-white/[0.055] px-4 py-4">
+      <p className="font-bold text-zinc-500">{label}</p>
+      <p
+        className={`font-black ${
+          green
+            ? "text-green-300"
+            : blue
+            ? "text-sky-300"
+            : orange
+            ? "text-orange-300"
+            : "text-white"
+        }`}
+      >
+        {value}
+      </p>
     </div>
   );
 }
