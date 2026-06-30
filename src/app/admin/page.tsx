@@ -1,31 +1,33 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { formatMoney } from "@/lib/revenue";
 
-type Provider = any;
-type Profile = any;
-type Booking = any;
-
-export default function AdminCommandCenterPage() {
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [wallet, setWallet] = useState<any[]>([]);
+export default function AdminPage() {
+  const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(null);
+  const [providers, setProviders] = useState<any[]>([]);
+  const [bookings, setBookings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [active, setActive] = useState<"providers" | "users" | "bookings" | "cashback">(
-    "providers"
-  );
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    loadAll();
+    loadAdmin();
 
     const channel = supabase
-      .channel("admin-command")
-      .on("postgres_changes", { event: "*", schema: "public", table: "providers" }, loadAll)
-      .on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, loadAll)
+      .channel("admin-command-center")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "providers" },
+        () => loadAdmin()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bookings" },
+        () => loadAdmin()
+      )
       .subscribe();
 
     return () => {
@@ -33,660 +35,563 @@ export default function AdminCommandCenterPage() {
     };
   }, []);
 
-  async function loadAll() {
+  async function loadAdmin() {
     setLoading(true);
 
-    const [providerRes, profileRes, bookingRes, walletRes] = await Promise.all([
-      supabase.from("providers").select("*").order("created_at", { ascending: false }),
-      supabase.from("profiles").select("*").order("created_at", { ascending: false }),
-      supabase.from("bookings").select("*").order("created_at", { ascending: false }),
-      supabase
-        .from("wallet_transactions")
-        .select("*")
-        .order("created_at", { ascending: false }),
-    ]);
+    const { data: userData } = await supabase.auth.getUser();
+    const currentUser = userData.user;
+    setUser(currentUser);
 
-    setProviders(providerRes.data || []);
-    setProfiles(profileRes.data || []);
-    setBookings(bookingRes.data || []);
-    setWallet(walletRes.data || []);
+    if (!currentUser) {
+      setProfile(null);
+      setProviders([]);
+      setBookings([]);
+      setLoading(false);
+      return;
+    }
+
+    const { data: profileData } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", currentUser.id)
+      .maybeSingle();
+
+    setProfile(profileData || null);
+
+    const { data: providerRows } = await supabase
+      .from("providers")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    const { data: bookingRows } = await supabase
+      .from("bookings")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    setProviders(providerRows || []);
+    setBookings(bookingRows || []);
     setLoading(false);
   }
 
-  const stats = useMemo(() => {
-    const totalValue = bookings.reduce((s, b) => s + Number(b.total_amount || 0), 0);
-    const commission = bookings.reduce((s, b) => s + Number(b.platform_fee || 0), 0);
-    const cashback = bookings.reduce((s, b) => s + Number(b.cashback_amount || 0), 0);
-    const providerEarning = bookings.reduce((s, b) => s + Number(b.provider_earning || 0), 0);
-
-    return {
-      users: profiles.length,
-      customers: profiles.filter((p) => p.role === "customer").length,
-      providers: providers.length,
-      pendingProviders: providers.filter((p) => !p.approved).length,
-      approvedProviders: providers.filter((p) => p.approved).length,
-      bookings: bookings.length,
-      completed: bookings.filter((b) => b.status === "completed").length,
-      totalValue,
-      commission,
-      cashback,
-      providerEarning,
-      creditedCashback: wallet.reduce((s, w) => s + Number(w.amount || 0), 0),
-    };
-  }, [providers, profiles, bookings, wallet]);
-
-  async function updateProvider(id: string, patch: Partial<Provider>) {
-    setMessage("");
-
-    const { error } = await supabase.from("providers").update(patch).eq("id", id);
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    await loadAll();
-  }
-
-  async function updateProfileRole(id: string, role: "customer" | "provider" | "admin") {
+  async function updateProvider(providerId: string, updates: any) {
     setMessage("");
 
     const { error } = await supabase
-      .from("profiles")
-      .update({ role, updated_at: new Date().toISOString() })
-      .eq("id", id);
+      .from("providers")
+      .update(updates)
+      .eq("id", providerId);
 
     if (error) {
       setMessage(error.message);
       return;
     }
 
-    await loadAll();
+    setMessage("Provider updated successfully.");
+    loadAdmin();
   }
 
-  async function deleteProvider(id: string) {
-    const ok = confirm("Delete this provider profile?");
-    if (!ok) return;
-
-    const { error } = await supabase.from("providers").delete().eq("id", id);
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    await loadAll();
+  async function logout() {
+    await supabase.auth.signOut();
+    window.location.href = "/";
   }
 
-  async function markPaid(booking: Booking) {
-    await supabase.from("bookings").update({ payment_status: "paid" }).eq("id", booking.id);
-    await loadAll();
+  const stats = useMemo(() => {
+    const completed = bookings.filter((b) => b.status === "completed");
+    const pending = bookings.filter((b) => b.status === "pending");
+    const accepted = bookings.filter((b) => b.status === "accepted");
+    const rejected = bookings.filter((b) => b.status === "rejected");
+
+    const revenue = completed.reduce(
+      (sum, b) => sum + Number(b.platform_fee || 0),
+      0
+    );
+
+    const providerPayout = completed.reduce(
+      (sum, b) => sum + Number(b.provider_earning || 0),
+      0
+    );
+
+    const cashback = completed.reduce(
+      (sum, b) => sum + Number(b.cashback_amount || 0),
+      0
+    );
+
+    const totalVolume = bookings.reduce(
+      (sum, b) => sum + Number(b.total_amount || 0),
+      0
+    );
+
+    const pendingProviders = providers.filter((p) => !p.approved).length;
+    const approvedProviders = providers.filter((p) => p.approved).length;
+    const verifiedProviders = providers.filter((p) => p.verified).length;
+    const premiumProviders = providers.filter((p) => p.premium).length;
+
+    return {
+      revenue,
+      providerPayout,
+      cashback,
+      totalVolume,
+      pendingProviders,
+      approvedProviders,
+      verifiedProviders,
+      premiumProviders,
+      completed: completed.length,
+      pending: pending.length,
+      accepted: accepted.length,
+      rejected: rejected.length,
+      totalBookings: bookings.length,
+    };
+  }, [providers, bookings]);
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-[#050608] px-5 pt-40 text-white">
+        <div className="mx-auto max-w-7xl">
+          <h1 className="text-4xl font-black">Loading admin command center...</h1>
+        </div>
+      </main>
+    );
   }
 
-  async function completeBooking(booking: Booking) {
-    const code = prompt("Enter customer service code:");
-    if (!code) return;
-
-    if (code !== booking.service_code) {
-      alert("Wrong service code.");
-      return;
-    }
-
-    await supabase
-      .from("bookings")
-      .update({
-        status: "completed",
-        completed_at: new Date().toISOString(),
-        provider_phone_hidden: false,
-      })
-      .eq("id", booking.id);
-
-    await loadAll();
+  if (!user) {
+    return (
+      <main className="min-h-screen bg-[#050608] px-5 pt-40 text-white">
+        <div className="mx-auto max-w-3xl rounded-[36px] border border-white/10 bg-white/[0.055] p-8">
+          <h1 className="text-5xl font-black tracking-[-0.05em]">
+            Admin login required.
+          </h1>
+          <p className="mt-4 text-zinc-400">
+            Please login with your admin account first.
+          </p>
+          <Link
+            href="/admin-login"
+            className="mt-6 inline-flex rounded-full bg-white px-6 py-3 font-black text-black"
+          >
+            Admin Login
+          </Link>
+        </div>
+      </main>
+    );
   }
 
-  async function creditCashback(booking: Booking) {
-    if (!booking.customer_id && !booking.user_id) {
-      alert("No customer ID found for this booking.");
-      return;
-    }
-
-    await supabase.from("wallet_transactions").insert({
-      user_id: booking.customer_id || booking.user_id,
-      booking_id: booking.id,
-      amount: Number(booking.cashback_amount || 0),
-      type: "cashback",
-      status: "credited",
-    });
-
-    await supabase
-      .from("bookings")
-      .update({ cashback_status: "credited" })
-      .eq("id", booking.id);
-
-    await loadAll();
-  }
-
-  async function seedDemoProviders() {
-    const demoProviders = [
-      {
-        full_name: "Ramesh Electric Works",
-        phone: "9800000001",
-        city: "Kathmandu",
-        service_category: "electrician",
-        description: "Wiring, inverter, fan, switchboard and electrical safety work.",
-        approved: true,
-        verified: true,
-        premium: true,
-        featured: true,
-        ai_score: 96,
-        trust_score: 94,
-        total_bookings: 38,
-      },
-      {
-        full_name: "Aarav Plumbing Service",
-        phone: "9800000002",
-        city: "Lalitpur",
-        service_category: "plumber",
-        description: "Leakage repair, bathroom fitting, kitchen pipe and emergency plumbing.",
-        approved: true,
-        verified: true,
-        premium: false,
-        featured: true,
-        ai_score: 91,
-        trust_score: 89,
-        total_bookings: 27,
-      },
-      {
-        full_name: "SecureView CCTV Nepal",
-        phone: "9800000003",
-        city: "Bhaktapur",
-        service_category: "cctv",
-        description: "CCTV camera setup, DVR configuration and home security installation.",
-        approved: true,
-        verified: true,
-        premium: true,
-        featured: false,
-        ai_score: 93,
-        trust_score: 92,
-        total_bookings: 19,
-      },
-      {
-        full_name: "CleanPro Home Care",
-        phone: "9800000004",
-        city: "Kathmandu",
-        service_category: "cleaning",
-        description: "Home cleaning, office cleaning, deep cleaning and post-service cleanup.",
-        approved: true,
-        verified: false,
-        premium: false,
-        featured: false,
-        ai_score: 84,
-        trust_score: 80,
-        total_bookings: 12,
-      },
-    ];
-
-    const { error } = await supabase.from("providers").insert(demoProviders);
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    await loadAll();
+  if (profile?.role !== "admin") {
+    return (
+      <main className="min-h-screen bg-[#050608] px-5 pt-40 text-white">
+        <div className="mx-auto max-w-3xl rounded-[36px] border border-red-400/20 bg-red-500/10 p-8">
+          <h1 className="text-5xl font-black tracking-[-0.05em]">
+            Access denied.
+          </h1>
+          <p className="mt-4 text-red-100/80">
+            This page is only for EKA admins.
+          </p>
+          <button
+            onClick={logout}
+            className="mt-6 rounded-full bg-white px-6 py-3 font-black text-black"
+          >
+            Logout
+          </button>
+        </div>
+      </main>
+    );
   }
 
   return (
-    <div className="relative">
-      <style jsx global>{`
-        @keyframes adminGlow {
-          0%,
-          100% {
-            opacity: 0.55;
-            transform: translateY(0px);
-          }
-          50% {
-            opacity: 0.95;
-            transform: translateY(-8px);
-          }
-        }
+    <main className="min-h-screen overflow-hidden bg-[#050608] px-5 pb-20 pt-40 text-white">
+      <Background />
 
-        .admin-panel {
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          background: linear-gradient(
-            180deg,
-            rgba(255, 255, 255, 0.08),
-            rgba(255, 255, 255, 0.035)
-          );
-          box-shadow: 0 35px 120px rgba(0, 0, 0, 0.38);
-          backdrop-filter: blur(24px);
-        }
-      `}</style>
+      <section className="relative mx-auto max-w-7xl">
+        <div className="mb-10 grid gap-8 lg:grid-cols-[1fr_420px] lg:items-end">
+          <div>
+            <p className="mb-4 text-sm font-black uppercase tracking-[0.28em] text-red-300">
+              Admin Command Center
+            </p>
 
-      <div className="pointer-events-none absolute -right-24 -top-24 h-80 w-80 rounded-full bg-emerald-400/10 blur-3xl" />
+            <h1 className="max-w-5xl text-6xl font-black leading-[0.86] tracking-[-0.08em] md:text-8xl">
+              Run EKA like a real platform.
+            </h1>
 
-      <div className="relative z-10 mb-8 flex flex-col justify-between gap-6 xl:flex-row xl:items-end">
-        <div>
-          <p className="mb-4 text-sm font-black uppercase tracking-[0.28em] text-emerald-300">
-            Admin Command Center
-          </p>
+            <p className="mt-6 max-w-3xl text-lg leading-8 text-zinc-400">
+              Track revenue, approve providers, monitor bookings, manage trust,
+              and control marketplace quality from one place.
+            </p>
+          </div>
 
-          <h1 className="max-w-5xl text-5xl font-black leading-[0.9] tracking-[-0.06em] md:text-7xl">
-            Control trust, users, providers and money.
-          </h1>
+          <Panel>
+            <p className="text-sm font-black uppercase tracking-[0.25em] text-green-300">
+              Platform Revenue
+            </p>
 
-          <p className="mt-5 max-w-3xl text-lg leading-8 text-zinc-400">
-            This is the real marketplace brain of EKA. Admin approves providers,
-            verifies trust, manages roles, completes protected bookings and credits cashback.
-          </p>
+            <h2 className="mt-5 text-6xl font-black tracking-[-0.08em] text-green-300">
+              {formatMoney(stats.revenue)}
+            </h2>
+
+            <p className="mt-3 text-sm font-bold text-zinc-500">
+              From completed protected bookings
+            </p>
+          </Panel>
         </div>
 
-        <button
-          onClick={seedDemoProviders}
-          className="w-fit rounded-full bg-white px-6 py-3 text-sm font-black text-black transition hover:scale-[1.02]"
-        >
-          Add Demo Providers
-        </button>
-      </div>
+        {message && <Alert>{message}</Alert>}
 
-      {message && (
-        <p className="mb-6 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-200">
-          {message}
-        </p>
-      )}
-
-      <div className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Stat title="Users" value={stats.users} />
-        <Stat title="Pending Providers" value={stats.pendingProviders} orange />
-        <Stat title="EKA Commission" value={formatMoney(stats.commission)} green />
-        <Stat title="Cashback Credited" value={formatMoney(stats.creditedCashback)} blue />
-      </div>
-
-      <div className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Stat title="Customers" value={stats.customers} />
-        <Stat title="Providers" value={stats.providers} />
-        <Stat title="Bookings" value={stats.bookings} />
-        <Stat title="Booking Value" value={formatMoney(stats.totalValue)} />
-      </div>
-
-      <div className="admin-panel mb-8 rounded-[28px] p-2">
-        <div className="grid gap-2 md:grid-cols-4">
-          <Tab active={active === "providers"} onClick={() => setActive("providers")} label="Provider Approval" />
-          <Tab active={active === "users"} onClick={() => setActive("users")} label="User Roles" />
-          <Tab active={active === "bookings"} onClick={() => setActive("bookings")} label="Booking Control" />
-          <Tab active={active === "cashback"} onClick={() => setActive("cashback")} label="Cashback Wallet" />
+        <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <Stat title="Booking Volume" value={formatMoney(stats.totalVolume)} />
+          <Stat title="Provider Payout" value={formatMoney(stats.providerPayout)} />
+          <Stat title="Cashback Given" value={formatMoney(stats.cashback)} />
+          <Stat title="Total Bookings" value={stats.totalBookings} />
         </div>
-      </div>
 
-      {loading ? (
-        <div className="admin-panel rounded-[34px] p-8">
-          <h2 className="text-3xl font-black">Loading admin control...</h2>
+        <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <Stat title="Pending Jobs" value={stats.pending} color="orange" />
+          <Stat title="Accepted Jobs" value={stats.accepted} color="blue" />
+          <Stat title="Completed Jobs" value={stats.completed} color="green" />
+          <Stat title="Rejected Jobs" value={stats.rejected} color="red" />
         </div>
-      ) : (
-        <>
-          {active === "providers" && (
-            <section className="admin-panel rounded-[34px] p-6">
-              <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-center">
+
+        <div className="grid gap-6 xl:grid-cols-[440px_1fr]">
+          <div className="space-y-6">
+            <Panel>
+              <p className="text-sm font-black uppercase tracking-[0.25em] text-zinc-600">
+                Provider Control
+              </p>
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <Mini label="Pending" value={stats.pendingProviders} />
+                <Mini label="Approved" value={stats.approvedProviders} />
+                <Mini label="Verified" value={stats.verifiedProviders} />
+                <Mini label="Premium" value={stats.premiumProviders} />
+              </div>
+            </Panel>
+
+            <Panel>
+              <p className="text-sm font-black uppercase tracking-[0.25em] text-red-300">
+                Business Model
+              </p>
+
+              <div className="mt-5 space-y-3">
+                <Business title="Commission" text="5–10% from completed bookings" />
+                <Business title="Provider Plans" text="Monthly premium visibility" />
+                <Business title="Verification" text="Paid trust badge and ranking" />
+                <Business title="Boosts" text="Featured placement in marketplace" />
+              </div>
+            </Panel>
+
+            <Panel>
+              <p className="text-sm font-black uppercase tracking-[0.25em] text-sky-300">
+                Admin Actions
+              </p>
+
+              <div className="mt-5 grid gap-3">
+                <Link
+                  href="/providers"
+                  className="rounded-2xl border border-white/10 bg-white/[0.055] px-4 py-3 text-center font-black text-white transition hover:bg-white hover:text-black"
+                >
+                  View Marketplace
+                </Link>
+                <Link
+                  href="/protected-booking"
+                  className="rounded-2xl border border-white/10 bg-white/[0.055] px-4 py-3 text-center font-black text-white transition hover:bg-white hover:text-black"
+                >
+                  Test Booking
+                </Link>
+              </div>
+            </Panel>
+          </div>
+
+          <div className="space-y-6">
+            <Panel>
+              <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-end">
                 <div>
-                  <h2 className="text-3xl font-black">Provider Approval Center</h2>
-                  <p className="mt-2 text-zinc-500">
-                    Approve, verify, feature and upgrade provider accounts.
+                  <p className="text-sm font-black uppercase tracking-[0.25em] text-zinc-600">
+                    Provider Approvals
                   </p>
+                  <h2 className="mt-2 text-4xl font-black tracking-[-0.05em]">
+                    Marketplace Quality
+                  </h2>
                 </div>
-                <span className="rounded-full bg-orange-400/10 px-4 py-2 text-xs font-black text-orange-300">
-                  {stats.pendingProviders} pending
-                </span>
               </div>
 
               {providers.length === 0 ? (
-                <Empty
-                  title="No providers yet."
-                  text="Create provider account from signup or click Add Demo Providers."
-                />
+                <Empty title="No providers yet." />
               ) : (
-                <div className="grid gap-4">
-                  {providers.map((p) => (
-                    <div
-                      key={p.id}
-                      className="rounded-[30px] border border-white/10 bg-black/35 p-5"
-                    >
-                      <div className="grid gap-6 xl:grid-cols-[1fr_440px] xl:items-center">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-2xl font-black">{p.full_name || "Unnamed Provider"}</h3>
-                            <Badge text={p.approved ? "approved" : "pending"} tone={p.approved ? "green" : "orange"} />
-                            <Badge text={p.verified ? "verified" : "unverified"} tone={p.verified ? "blue" : "white"} />
-                            <Badge text={p.premium ? "premium" : "free"} tone={p.premium ? "yellow" : "white"} />
-                            {p.featured && <Badge text="featured" tone="red" />}
-                          </div>
-
-                          <p className="mt-2 text-zinc-500">
-                            {p.service_category || "Service"} · {p.city || "City"} · {p.phone || "No phone"}
-                          </p>
-
-                          <p className="mt-3 max-w-3xl leading-7 text-zinc-400">
-                            {p.description || "No description added."}
-                          </p>
-
-                          <div className="mt-5 grid gap-3 sm:grid-cols-4">
-                            <Mini title="AI Score" value={p.ai_score || 70} green />
-                            <Mini title="Trust" value={p.trust_score || 70} blue />
-                            <Mini title="Jobs" value={p.total_bookings || 0} />
-                            <Mini title="Owner" value={p.owner_id ? "Linked" : "Demo"} />
-                          </div>
-                        </div>
-
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <Action
-                            label={p.approved ? "Unapprove" : "Approve"}
-                            tone={p.approved ? "dark" : "green"}
-                            onClick={() => updateProvider(p.id, { approved: !p.approved })}
-                          />
-                          <Action
-                            label={p.verified ? "Remove Verify" : "Verify"}
-                            tone={p.verified ? "dark" : "blue"}
-                            onClick={() => updateProvider(p.id, { verified: !p.verified })}
-                          />
-                          <Action
-                            label={p.premium ? "Free Plan" : "Make Premium"}
-                            tone={p.premium ? "dark" : "yellow"}
-                            onClick={() => updateProvider(p.id, { premium: !p.premium })}
-                          />
-                          <Action
-                            label={p.featured ? "Unfeature" : "Feature"}
-                            tone={p.featured ? "dark" : "red"}
-                            onClick={() => updateProvider(p.id, { featured: !p.featured })}
-                          />
-                          <Action
-                            label="+ AI Score"
-                            tone="white"
-                            onClick={() => updateProvider(p.id, { ai_score: Number(p.ai_score || 70) + 5 })}
-                          />
-                          <Action
-                            label="+ Trust"
-                            tone="white"
-                            onClick={() => updateProvider(p.id, { trust_score: Number(p.trust_score || 70) + 5 })}
-                          />
-                          <button
-                            onClick={() => deleteProvider(p.id)}
-                            className="sm:col-span-2 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 font-black text-red-200"
-                          >
-                            Delete Provider
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                <div className="space-y-4">
+                  {providers.map((provider) => (
+                    <ProviderCard
+                      key={provider.id}
+                      provider={provider}
+                      updateProvider={updateProvider}
+                    />
                   ))}
                 </div>
               )}
-            </section>
-          )}
+            </Panel>
 
-          {active === "users" && (
-            <section className="admin-panel rounded-[34px] p-6">
+            <Panel>
               <div className="mb-6">
-                <h2 className="text-3xl font-black">User Role Management</h2>
-                <p className="mt-2 text-zinc-500">
-                  Change accounts between customer, provider and admin.
+                <p className="text-sm font-black uppercase tracking-[0.25em] text-zinc-600">
+                  Live Transactions
                 </p>
-              </div>
-
-              {profiles.length === 0 ? (
-                <Empty title="No user profiles found." text="Create users from signup first." />
-              ) : (
-                <div className="grid gap-4">
-                  {profiles.map((u) => (
-                    <div
-                      key={u.id}
-                      className="rounded-[28px] border border-white/10 bg-black/35 p-5"
-                    >
-                      <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-center">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-2xl font-black">
-                              {u.full_name || "Unnamed User"}
-                            </h3>
-                            <Badge text={u.role || "customer"} tone={u.role === "admin" ? "red" : u.role === "provider" ? "orange" : "blue"} />
-                          </div>
-                          <p className="mt-2 text-zinc-500">{u.email || "No email"}</p>
-                        </div>
-
-                        <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[420px]">
-                          <Action label="Customer" tone="blue" onClick={() => updateProfileRole(u.id, "customer")} />
-                          <Action label="Provider" tone="orange" onClick={() => updateProfileRole(u.id, "provider")} />
-                          <Action label="Admin" tone="red" onClick={() => updateProfileRole(u.id, "admin")} />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-
-          {active === "bookings" && (
-            <section className="admin-panel rounded-[34px] p-6">
-              <div className="mb-6">
-                <h2 className="text-3xl font-black">Booking Control</h2>
-                <p className="mt-2 text-zinc-500">
-                  Mark paid, verify service code, complete booking and trigger cashback.
-                </p>
+                <h2 className="mt-2 text-4xl font-black tracking-[-0.05em]">
+                  Recent Bookings
+                </h2>
               </div>
 
               {bookings.length === 0 ? (
-                <Empty
-                  title="No bookings yet."
-                  text="Create a protected booking from the customer workspace."
-                />
+                <Empty title="No bookings yet." />
               ) : (
-                <div className="grid gap-4">
-                  {bookings.map((b) => (
-                    <div key={b.id} className="rounded-[28px] border border-white/10 bg-black/35 p-5">
-                      <div className="grid gap-6 xl:grid-cols-[1fr_420px] xl:items-center">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-2xl font-black">{b.customer_name || "Customer"}</h3>
-                            <Badge text={b.status || "pending"} tone={b.status === "completed" ? "green" : "orange"} />
-                            <Badge text={b.payment_status || "payment pending"} tone={b.payment_status === "paid" ? "green" : "white"} />
-                            <Badge text={b.cashback_status || "cashback pending"} tone={b.cashback_status === "credited" ? "blue" : "white"} />
-                          </div>
-
-                          <p className="mt-2 text-zinc-500">
-                            {b.city || "No city"} · Code: {b.service_code || "-"} · {b.notes || b.message || "No note"}
-                          </p>
-
-                          <div className="mt-5 grid gap-3 sm:grid-cols-4">
-                            <Mini title="Amount" value={formatMoney(b.total_amount)} />
-                            <Mini title="Commission" value={formatMoney(b.platform_fee)} green />
-                            <Mini title="Provider" value={formatMoney(b.provider_earning)} blue />
-                            <Mini title="Cashback" value={formatMoney(b.cashback_amount)} orange />
-                          </div>
-                        </div>
-
-                        <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                          <Action label="Mark Paid" tone="white" onClick={() => markPaid(b)} />
-                          <Action label="Complete with Code" tone="green" onClick={() => completeBooking(b)} />
-                          <Action label="Credit Cashback" tone="blue" onClick={() => creditCashback(b)} />
-                        </div>
-                      </div>
-                    </div>
+                <div className="space-y-4">
+                  {bookings.slice(0, 8).map((booking) => (
+                    <BookingRow key={booking.id} booking={booking} />
                   ))}
                 </div>
               )}
-            </section>
-          )}
+            </Panel>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
 
-          {active === "cashback" && (
-            <section className="admin-panel rounded-[34px] p-6">
-              <div className="mb-6">
-                <h2 className="text-3xl font-black">Cashback Wallet</h2>
-                <p className="mt-2 text-zinc-500">
-                  Every credited cashback transaction appears here.
-                </p>
-              </div>
+function ProviderCard({
+  provider,
+  updateProvider,
+}: {
+  provider: any;
+  updateProvider: (providerId: string, updates: any) => void;
+}) {
+  return (
+    <div className="rounded-[30px] border border-white/10 bg-black/35 p-5">
+      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="text-2xl font-black tracking-[-0.04em]">
+              {provider.full_name || "Unnamed Provider"}
+            </h3>
 
-              {wallet.length === 0 ? (
-                <Empty
-                  title="No cashback credited yet."
-                  text="Complete a booking and click Credit Cashback."
-                />
-              ) : (
-                <div className="grid gap-4">
-                  {wallet.map((w) => (
-                    <div key={w.id} className="rounded-[28px] border border-white/10 bg-black/35 p-5">
-                      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-                        <div>
-                          <h3 className="text-2xl font-black">{formatMoney(w.amount)}</h3>
-                          <p className="mt-2 text-zinc-500">
-                            {w.type || "cashback"} · {w.status || "credited"}
-                          </p>
-                        </div>
-                        <Badge text="credited" tone="blue" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-        </>
-      )}
+            <Status active={provider.approved} yes="Approved" no="Pending" />
+          </div>
+
+          <p className="mt-2 text-sm font-bold text-zinc-500">
+            {provider.service_category || "Service"} · {provider.city || "City"}
+          </p>
+
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+            {provider.description || "No description added."}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <Mini label="Trust" value={provider.trust_score || 70} />
+          <Mini label="AI" value={provider.ai_score || 72} />
+          <Mini label="Jobs" value={provider.total_bookings || 0} />
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <AdminButton
+          active={provider.approved}
+          onClick={() =>
+            updateProvider(provider.id, { approved: !provider.approved })
+          }
+        >
+          {provider.approved ? "Unapprove" : "Approve"}
+        </AdminButton>
+
+        <AdminButton
+          active={provider.verified}
+          onClick={() =>
+            updateProvider(provider.id, { verified: !provider.verified })
+          }
+        >
+          {provider.verified ? "Unverify" : "Verify"}
+        </AdminButton>
+
+        <AdminButton
+          active={provider.premium}
+          onClick={() =>
+            updateProvider(provider.id, { premium: !provider.premium })
+          }
+        >
+          {provider.premium ? "Remove Pro" : "Make Pro"}
+        </AdminButton>
+
+        <AdminButton
+          active={provider.featured}
+          onClick={() =>
+            updateProvider(provider.id, { featured: !provider.featured })
+          }
+        >
+          {provider.featured ? "Unfeature" : "Feature"}
+        </AdminButton>
+      </div>
     </div>
   );
 }
 
-function Tab({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
+function BookingRow({ booking }: { booking: any }) {
   return (
-    <button
-      onClick={onClick}
-      className={`rounded-2xl px-4 py-4 text-sm font-black transition ${
-        active ? "bg-white text-black" : "bg-black/30 text-zinc-400 hover:bg-white/10 hover:text-white"
-      }`}
-    >
-      {label}
-    </button>
+    <div className="rounded-[26px] border border-white/10 bg-black/35 p-5">
+      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="text-xl font-black">
+              {booking.customer_name || "Customer"}
+            </h3>
+            <BookingStatus status={booking.status || "pending"} />
+          </div>
+
+          <p className="mt-2 text-sm font-bold text-zinc-500">
+            {booking.city || "City"} · {booking.address || "Address"}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <Mini
+            label="Total"
+            value={formatMoney(Number(booking.total_amount || 0))}
+          />
+          <Mini
+            label="Fee"
+            value={formatMoney(Number(booking.platform_fee || 0))}
+          />
+          <Mini
+            label="Cashback"
+            value={formatMoney(Number(booking.cashback_amount || 0))}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 
-function Stat({
-  title,
-  value,
-  green,
-  blue,
-  orange,
-}: {
-  title: string;
-  value: any;
-  green?: boolean;
-  blue?: boolean;
-  orange?: boolean;
-}) {
+function Background() {
   return (
-    <div className="admin-panel rounded-[28px] p-6">
-      <p className="text-sm font-bold text-zinc-500">{title}</p>
-      <h3
-        className={`mt-3 text-3xl font-black ${
-          green ? "text-green-300" : blue ? "text-sky-300" : orange ? "text-orange-300" : "text-white"
-        }`}
-      >
+    <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_10%,rgba(239,68,68,0.18),transparent_28%),radial-gradient(circle_at_85%_20%,rgba(14,165,233,0.08),transparent_24%)]" />
+  );
+}
+
+function Panel({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-[36px] border border-white/10 bg-white/[0.055] p-6 shadow-[0_40px_140px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
+      {children}
+    </div>
+  );
+}
+
+function Stat({ title, value, color = "white" }: any) {
+  const colorClass =
+    color === "green"
+      ? "text-green-300"
+      : color === "blue"
+      ? "text-sky-300"
+      : color === "red"
+      ? "text-red-300"
+      : color === "orange"
+      ? "text-orange-300"
+      : "text-white";
+
+  return (
+    <div className="rounded-[30px] border border-white/10 bg-white/[0.055] p-6">
+      <p className="text-sm font-black uppercase tracking-[0.22em] text-zinc-600">
+        {title}
+      </p>
+      <h3 className={`mt-4 text-4xl font-black tracking-[-0.05em] ${colorClass}`}>
         {value}
       </h3>
     </div>
   );
 }
 
-function Mini({
-  title,
-  value,
-  green,
-  blue,
-  orange,
-}: {
-  title: string;
-  value: any;
-  green?: boolean;
-  blue?: boolean;
-  orange?: boolean;
-}) {
+function Mini({ label, value }: any) {
   return (
-    <div className="rounded-2xl bg-white/[0.055] p-4">
-      <p className="text-xs font-bold text-zinc-500">{title}</p>
-      <p
-        className={`mt-1 font-black ${
-          green ? "text-green-300" : blue ? "text-sky-300" : orange ? "text-orange-300" : "text-white"
-        }`}
-      >
-        {value}
-      </p>
+    <div className="rounded-2xl bg-white/[0.055] p-3">
+      <p className="text-[11px] font-bold text-zinc-500">{label}</p>
+      <p className="mt-1 font-black text-white">{value}</p>
     </div>
   );
 }
 
-function Badge({
-  text,
-  tone = "white",
-}: {
-  text: string;
-  tone?: "white" | "green" | "blue" | "orange" | "yellow" | "red";
-}) {
-  const styles = {
-    white: "bg-white/10 text-zinc-300",
-    green: "bg-green-400/10 text-green-300",
-    blue: "bg-sky-400/10 text-sky-300",
-    orange: "bg-orange-400/10 text-orange-300",
-    yellow: "bg-yellow-400 text-black",
-    red: "bg-red-500/20 text-red-200",
-  };
-
+function Business({ title, text }: any) {
   return (
-    <span className={`rounded-full px-3 py-1 text-xs font-black uppercase ${styles[tone]}`}>
-      {text}
+    <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+      <p className="font-black text-white">{title}</p>
+      <p className="mt-1 text-sm font-bold text-zinc-500">{text}</p>
+    </div>
+  );
+}
+
+function Empty({ title }: { title: string }) {
+  return (
+    <div className="rounded-[28px] border border-white/10 bg-black/35 p-6">
+      <h3 className="text-2xl font-black">{title}</h3>
+    </div>
+  );
+}
+
+function Status({
+  active,
+  yes,
+  no,
+}: {
+  active: boolean;
+  yes: string;
+  no: string;
+}) {
+  return (
+    <span
+      className={`rounded-full px-3 py-1 text-xs font-black ${
+        active ? "bg-green-400/10 text-green-300" : "bg-orange-400/10 text-orange-300"
+      }`}
+    >
+      {active ? yes : no}
     </span>
   );
 }
 
-function Action({
-  label,
-  onClick,
-  tone,
-}: {
-  label: string;
-  onClick: () => void;
-  tone: "white" | "green" | "blue" | "orange" | "yellow" | "red" | "dark";
-}) {
-  const styles = {
-    white: "bg-white text-black",
-    green: "bg-green-500 text-black",
-    blue: "bg-sky-500 text-black",
-    orange: "bg-orange-500 text-black",
-    yellow: "bg-yellow-400 text-black",
-    red: "bg-red-500 text-white",
-    dark: "border border-white/10 bg-white/[0.06] text-white",
-  };
+function BookingStatus({ status }: { status: string }) {
+  const color =
+    status === "completed"
+      ? "bg-green-400/10 text-green-300"
+      : status === "accepted"
+      ? "bg-sky-400/10 text-sky-300"
+      : status === "rejected"
+      ? "bg-red-400/10 text-red-300"
+      : "bg-orange-400/10 text-orange-300";
 
+  return (
+    <span className={`rounded-full px-3 py-1 text-xs font-black ${color}`}>
+      {status}
+    </span>
+  );
+}
+
+function AdminButton({
+  children,
+  onClick,
+  active,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  active?: boolean;
+}) {
   return (
     <button
       onClick={onClick}
-      className={`rounded-2xl px-4 py-3 text-sm font-black transition hover:scale-[1.02] ${styles[tone]}`}
+      className={`rounded-2xl px-4 py-3 text-sm font-black transition hover:scale-[1.01] ${
+        active
+          ? "bg-green-400 text-black"
+          : "border border-white/10 bg-white/[0.055] text-white hover:bg-white hover:text-black"
+      }`}
     >
-      {label}
+      {children}
     </button>
   );
 }
 
-function Empty({ title, text }: { title: string; text: string }) {
+function Alert({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-[28px] border border-white/10 bg-black/35 p-8">
-      <h3 className="text-3xl font-black">{title}</h3>
-      <p className="mt-3 max-w-2xl leading-7 text-zinc-500">{text}</p>
+    <div className="mb-6 rounded-[24px] border border-green-400/20 bg-green-500/10 px-5 py-4 text-sm font-bold text-green-200">
+      {children}
     </div>
   );
 }
